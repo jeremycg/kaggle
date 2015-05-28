@@ -1,7 +1,9 @@
 #first read in training data:
 
 library(data.table)
+library(plyr)
 library(dplyr)
+library(caret)
 setwd("C:/Users/jeremy/Desktop/kaggle/kaggle/fbbid/")
 bids<-fread("bids.csv")
 train<-fread("train.csv")
@@ -54,7 +56,6 @@ commoncountry<-holding%>%group_by(bidder_id)%>%summarise(country=country[[which.
 differences<-function(df){
   df<-df[order(df$time), ]
   df$time<-c(0,diff(df$time))
-  df$time<-df$time-min(df$time)
   df
 }
 
@@ -66,10 +67,12 @@ meantimes<-timediffbids%>%group_by(bidder_id)%>%summarise(averagetimetobid=mean(
 
 #get sd
 sdtimes<-timediffbids%>%group_by(bidder_id)%>%summarise(sdtimetobid=sd(time))
-sdtimes$timetobid[is.na(sdtimes$sdtimetobid)]<-0
+sdtimes$sdtimetobid[is.na(sdtimes$sdtimetobid)]<-0
 
 #get % of first bidding
 percentfirst<-timediffbids%>%group_by(bidder_id)%>%summarise(percentfirst=sum(.[["time"]]==0)/n())
+
+
 
 #bid against self
 mergeddata2<-mergeddata
@@ -134,24 +137,26 @@ holding<-mergeddata%>%group_by(bidder_id,country)%>%summarise(n())
 numcountry<-holding%>%group_by(bidder_id)%>%summarise(numcountry=n())
 holding<-mergeddata%>%group_by(bidder_id,country)%>%summarise(number=n())
 commoncountry<-holding%>%group_by(bidder_id)%>%summarise(country=country[[which.max(.[["number"]])]])
+timediffbids<-mergeddata%>%group_by(auction)%>%do(.,differences(.))
 meantimes<-timediffbids%>%group_by(bidder_id)%>%summarise(averagetimetobid=mean(time))
 sdtimes<-timediffbids%>%group_by(bidder_id)%>%summarise(sdtimetobid=sd(time))
-sdtimes$timetobid[is.na(sdtimes$sdtimetobid)]<-0
+sdtimes$sdtimetobid[is.na(sdtimes$sdtimetobid)]<-0
 percentfirst<-timediffbids%>%group_by(bidder_id)%>%summarise(percentfirst=sum(.[["time"]]==0)/n())
+mergeddata2<-mergeddata
+mergeddata2$self<-0
 bidagainstself<-mergeddata2%>%group_by(auction)%>%do(.,bidself(.))
 bidagainstself<-bidagainstself%>%group_by(bidder_id)%>%summarise(percentself=sum(.[["self"]]==1)/n())
 
 
 #ok so we can join all the data
-fulldata2<-join_all(list(train,totalbids,meanbids,numauctions,numdevices,
+fulldata2<-join_all(list(test,totalbids,meanbids,numauctions,numdevices,
                         numtypes,commonmerch,numcountry,commoncountry,meantimes,
-                        sdtimes,percentfirst,bidagainstself
-), by = 'bidder_id', type = 'full')
+                        sdtimes,percentfirst,bidagainstself),
+                    by = 'bidder_id', type = 'full')
 
 #ok a couple hacks to make it work
 #remove countries that didnt appear in training
 fulldata2<-as.data.frame(fulldata2)
-fulldata2<-na.omit(fulldata2)
 fulldata2$country[!(fulldata2$country %in% fulldata$country)]<-"cn"
 predictors2<-fulldata2[,4:15]
 predictors2$commonmerch<-as.factor(predictors2$commonmerch)
@@ -161,4 +166,4 @@ predictors2$country<-as.factor(predictors2$country)
 x=cbind(as.data.frame(test),predict(gbmFit1,predictors2))
 x$`predict(gbmFit1, predictors2)`[x$`predict(gbmFit1, predictors2)`<0]<-0
 write.csv(x,"output.csv")
-#gave me score of 0.87021
+#gave me score of 0.87679
