@@ -91,25 +91,49 @@ bidself<-function(df){
 bidagainstself<-mergeddata2%>%group_by(auction)%>%do(.,bidself(.))
 bidagainstself<-bidagainstself%>%group_by(bidder_id)%>%summarise(percentself=sum(.[["self"]]==1)/n())
 
+#number final bids
+finalbids<-timediffbids%>%group_by(auction)%>%mutate(last = c(rep(0,n()-1), 1))
+numfinal<-finalbids%>%group_by(bidder_id)%>%summarise(percentfinal=sum(last))
 
+#percent of final bids of total
+percentfinal<-finalbids%>%group_by(bidder_id)%>%summarise(percentfinal=mean(last))
+
+#auctions bid on to auctions won
+percentwon<-finalbids%>%group_by(bidder_id,auction)%>%summarise(percentfinal=sum(last))%>%
+    group_by(bidder_id)%>%summarise(winpercent=mean(percentfinal))
+
+#add in
+#percent mismatched bids - how often do they bid with a weird search term
+holding<-mergeddata%>%group_by(auction,merchandise)%>%summarise(number=n())
+merchperauction<-holding%>%group_by(auction)%>%
+  summarise(cmerchandise=merchandise[[which.max(.[["number"]])]])
+holding<-merge(mergeddata,merchperauction,by="auction")
+percentmismatch<-holding%>%group_by(bidder_id,auction)%>%summarise(mismatch=sum(merchandise==cmerchandise)/n())%>%
+    group_by(bidder_id)%>%summarise(percentmismatch=mean(mismatch))
+#percent switching search term - bidding with different term = maybe not bot
+#zz<-mergeddata%>%group_by(bidder_id,auction)%>%distinct(.,"merchandise")%>%
+#  group_by(bidder_id,auction)%>%summarise(n())
+#appears to be none
 #ok so we can join all the data
 fulldata<-join_all(list(train,totalbids,meanbids,numauctions,numdevices,
-                   numtypes,commonmerch,numcountry,commoncountry,meantimes,
-                   sdtimes,percentfirst,bidagainstself
-                   ), by = 'bidder_id', type = 'full')
+                        numtypes,commonmerch,numcountry,commoncountry,meantimes,
+                        sdtimes,percentfirst,bidagainstself,numfinal,percentfinal,
+                        percentwon,percentmismatch
+), by = 'bidder_id', type = 'full')
 
 fulldata<-as.data.frame(fulldata)
 fulldata<-na.omit(fulldata)
-predictors<-fulldata[5:16]
+predictors<-fulldata[,5:19]
 predictors$commonmerch<-as.factor(predictors$commonmerch)
 predictors$country<-as.factor(predictors$country)
 outcomes<-fulldata[,4]
 
 
-fitControl <- trainControl(## 10-fold CV
+fitControl <- trainControl(
   method = "repeatedcv",
   number = 10,
-  repeats = 10)
+  repeats = 10, 
+  savePred=T)
 
 #gradient boosting
 gbmFit1 <- train(x=predictors,y=outcomes,
@@ -117,6 +141,9 @@ gbmFit1 <- train(x=predictors,y=outcomes,
                  trControl = fitControl,
                  verbose = FALSE)
 print(gbmFit1)
+
+#rffit1 <- train(fulldata[,4]~.,data=fulldata[,5:18],method="rf",trControl = fitControl,verbose=FALSE)
+#print(rffit1)
 
 #hok, so lets predict
 test<-fread("test.csv")
@@ -146,19 +173,29 @@ mergeddata2<-mergeddata
 mergeddata2$self<-0
 bidagainstself<-mergeddata2%>%group_by(auction)%>%do(.,bidself(.))
 bidagainstself<-bidagainstself%>%group_by(bidder_id)%>%summarise(percentself=sum(.[["self"]]==1)/n())
-
-
+finalbids<-timediffbids%>%group_by(auction)%>%mutate(last = c(rep(0,n()-1), 1))
+numfinal<-finalbids%>%group_by(bidder_id)%>%summarise(percentfinal=sum(last))
+percentfinal<-finalbids%>%group_by(bidder_id)%>%summarise(percentfinal=mean(last))
+percentwon<-finalbids%>%group_by(bidder_id,auction)%>%summarise(percentfinal=sum(last))%>%
+  group_by(bidder_id)%>%summarise(winpercent=mean(percentfinal))
+holding<-mergeddata%>%group_by(auction,merchandise)%>%summarise(number=n())
+merchperauction<-holding%>%group_by(auction)%>%
+  summarise(cmerchandise=merchandise[[which.max(.[["number"]])]])
+holding<-merge(mergeddata,merchperauction,by="auction")
+percentmismatch<-holding%>%group_by(bidder_id,auction)%>%summarise(mismatch=sum(merchandise==cmerchandise)/n())%>%
+  group_by(bidder_id)%>%summarise(percentmismatch=mean(mismatch))
 #ok so we can join all the data
 fulldata2<-join_all(list(test,totalbids,meanbids,numauctions,numdevices,
-                        numtypes,commonmerch,numcountry,commoncountry,meantimes,
-                        sdtimes,percentfirst,bidagainstself),
+                         numtypes,commonmerch,numcountry,commoncountry,meantimes,
+                         sdtimes,percentfirst,bidagainstself,numfinal,percentfinal,
+                         percentwon,percentmismatch),
                     by = 'bidder_id', type = 'full')
 
 #ok a couple hacks to make it work
 #remove countries that didnt appear in training
 fulldata2<-as.data.frame(fulldata2)
 fulldata2$country[!(fulldata2$country %in% fulldata$country)]<-"cn"
-predictors2<-fulldata2[,4:15]
+predictors2<-fulldata2[,4:18]
 predictors2$commonmerch<-as.factor(predictors2$commonmerch)
 predictors2$country<-as.factor(predictors2$country)
 
