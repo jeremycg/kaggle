@@ -1,7 +1,8 @@
 #first read in training data:
 
 library(data.table)
-setwd("C:/Users/jeremy/Desktop/kaggle/fbbid/")
+library(dplyr)
+setwd("C:/Users/jeremy/Desktop/kaggle/kaggle/fbbid/")
 bids<-fread("bids.csv")
 train<-fread("train.csv")
 
@@ -49,14 +50,54 @@ commoncountry<-holding%>%group_by(bidder_id)%>%summarise(country=country[[which.
 #numaccounts<-holding%>%group_by(bidder_id)%>%summarise(n())
 #only ever one
 
-#ok so we can deal with timing etc later, lets try combining em all and fitting a model.
+#let's see about time since last bid
+differences<-function(df){
+  df<-df[order(df$time), ]
+  df$time<-c(0,diff(df$time))
+  df$time<-df$time-min(df$time)
+  df
+}
+
+timediffbids<-mergeddata%>%group_by(auction)%>%do(.,differences(.))
+
+#now we need to do a couple things
+#get mean time to bid per user
+meantimes<-timediffbids%>%group_by(bidder_id)%>%summarise(averagetimetobid=mean(time))
+
+#get sd
+sdtimes<-timediffbids%>%group_by(bidder_id)%>%summarise(sdtimetobid=sd(time))
+sdtimes$timetobid[is.na(sdtimes$sdtimetobid)]<-0
+
+#get % of first bidding
+percentfirst<-timediffbids%>%group_by(bidder_id)%>%summarise(percentfirst=sum(.[["time"]]==0)/n())
+
+#bid against self
+mergeddata2<-mergeddata
+mergeddata2$self<-0
+bidself<-function(df){
+  df$self<-0
+  if(nrow(df)==1){
+    return(df)}
+  df<-df[order(df$time), ]
+  df$prevbidder<-c("none",df$bidder_id[-nrow(df)])
+  df$self[df$bidder_id==df$prevbidder]<-1
+  df$prevbidder<-NULL
+  df
+}
+
+bidagainstself<-mergeddata2%>%group_by(auction)%>%do(.,bidself(.))
+bidagainstself<-bidagainstself%>%group_by(bidder_id)%>%summarise(percentself=sum(.[["self"]]==1)/n())
+
+
+#ok so we can join all the data
 fulldata<-join_all(list(train,totalbids,meanbids,numauctions,numdevices,
-                   numtypes,commonmerch,numcountry,commoncountry
+                   numtypes,commonmerch,numcountry,commoncountry,meantimes,
+                   sdtimes,percentfirst,bidagainstself
                    ), by = 'bidder_id', type = 'full')
 
 fulldata<-as.data.frame(fulldata)
 fulldata<-na.omit(fulldata)
-predictors<-fulldata[5:12]
+predictors<-fulldata[5:16]
 predictors$commonmerch<-as.factor(predictors$commonmerch)
 predictors$country<-as.factor(predictors$country)
 outcomes<-fulldata[,4]
@@ -93,16 +134,26 @@ holding<-mergeddata%>%group_by(bidder_id,country)%>%summarise(n())
 numcountry<-holding%>%group_by(bidder_id)%>%summarise(numcountry=n())
 holding<-mergeddata%>%group_by(bidder_id,country)%>%summarise(number=n())
 commoncountry<-holding%>%group_by(bidder_id)%>%summarise(country=country[[which.max(.[["number"]])]])
-fulldata2<-join_all(list(test,totalbids,meanbids,numauctions,numdevices,
-                        numtypes,commonmerch,numcountry,commoncountry
-                        ), by = 'bidder_id', type = 'full')
+meantimes<-timediffbids%>%group_by(bidder_id)%>%summarise(averagetimetobid=mean(time))
+sdtimes<-timediffbids%>%group_by(bidder_id)%>%summarise(sdtimetobid=sd(time))
+sdtimes$timetobid[is.na(sdtimes$sdtimetobid)]<-0
+percentfirst<-timediffbids%>%group_by(bidder_id)%>%summarise(percentfirst=sum(.[["time"]]==0)/n())
+bidagainstself<-mergeddata2%>%group_by(auction)%>%do(.,bidself(.))
+bidagainstself<-bidagainstself%>%group_by(bidder_id)%>%summarise(percentself=sum(.[["self"]]==1)/n())
+
+
+#ok so we can join all the data
+fulldata2<-join_all(list(train,totalbids,meanbids,numauctions,numdevices,
+                        numtypes,commonmerch,numcountry,commoncountry,meantimes,
+                        sdtimes,percentfirst,bidagainstself
+), by = 'bidder_id', type = 'full')
 
 #ok a couple hacks to make it work
 #remove countries that didnt appear in training
 fulldata2<-as.data.frame(fulldata2)
 fulldata2<-na.omit(fulldata2)
 fulldata2$country[!(fulldata2$country %in% fulldata$country)]<-"cn"
-predictors2<-fulldata2[,4:11]
+predictors2<-fulldata2[,4:15]
 predictors2$commonmerch<-as.factor(predictors2$commonmerch)
 predictors2$country<-as.factor(predictors2$country)
 
