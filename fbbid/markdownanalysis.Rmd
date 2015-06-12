@@ -2,73 +2,38 @@
 output: html_document
 ---
 
-This is the first post of an occasional series on R, data science, Kaggle and my quest to make it through the book "The elements of statistical learning".
+This is (more or less) the code that got me my best answer. After reading through a couple of other peoples code, I should have looked more carefully at the time variables, and figured out times etc. Given I got 0.92341 compared to the winners 0.94254, it's not super important, but it is the small differences that matter.
 
-For a first post, here is a write up of my current kaggle problem. This knitr is an archived version - it wont hit my best score, and I haven't done too much data processing other than making predictors. At the time of writing it was enough to hit about the 50th percentile, and was about 0.1 lower than my best score.
+It's in R, written up in knitr -> HTML.
 
-Here's the kaggle challenge "Facebook Recruiting IV: Human or Robot?" - [link](https://www.kaggle.com/c/facebook-recruiting-iv-human-or-bot).
-
-The challenge presents as an auction website, which has been overtaken by bots outbidding real people.
-The user is to determine which users are bots and which are real. Presumably the owner will then ban the bots.
-
-This code is available as r markdown on github at www.github.com/jeremycg/kaggle
 
 Let's read in some libraries for analysis:
 
-```{r}
+```{r,eval=FALSE}
 library(data.table)
 library(plyr)
 library(dplyr)
 library(caret)
 library(knitr)
 library(bit64)
+library(doSNOW)
+library(igraph)
 ```
 
 And now let's read in the data. Im using fread from the data.table package, as it is a large file. 
 
-```{r}
+```{r,eval=FALSE}
 setwd("C:/Users/jeremy/Desktop/kaggle/kaggle/fbbid/")
 train<-fread("train.csv")
 bids<-fread("bids.csv")
 ```
 
-Lets take a look:
-
-```{r}
-kable(head(train))
-kable(head(bids))
-nrow(train)
-nrow(bids)
-```
-
-So, we have 2013 users to train on, with a little over 7.6 million bids.
-
-The user data has obfuscated rows for bidder id, payment account and address, as well as the outcome - was it a bot?
-
-The bid data has a bid id, bidder id (to link to the training data), an auction id, mechandise type (this can change per auction depending on how the user found it), device used to bid, time, country, ip, and referring url.
-
-We dont really need to merge the datasets - we can add it on at the end.
-
-Now we want predictors!
-
-First let's double check that there are no shared addresses or payment details in our training set:
-
-```{r}
-anyDuplicated(train$payment_account)
-anyDuplicated(train$address)
-```
-
-Nope! So we can put this to the side and not use it in any predictors.
-
-I'm going to use plyr on this data, as it is really large - data.table is also nice.
-
-Lets Slowly build up functions to make our table of predictors.
 
 First, how many total bids did each user make? We can assume bots are making a ton.
 
 We group_by bidder_id and then use n() to take the length. n() is a dplyr specific function implemented in rcpp, so is much faster than length or nrow.
 
-```{r}
+```{r,eval=FALSE}
 totalbids<-function(dataframe){
   dataframe%>%group_by(bidder_id)%>%summarise(totalbids=n())
 }
@@ -79,7 +44,7 @@ Next, we can take the number of bids per auction, on average. Again, I would gue
 First, group the data by bidder_id and auction, take the number of bids each user had on each auction.
 Then we group it again by user, and find the average for each. mean() is again very fast in dplyr.
 
-```{r}
+```{r,eval=FALSE}
 meanbids<-function(dataframe){
   dataframe%>%group_by(bidder_id,auction)%>%summarise(numberbids=n())%>%
     group_by(bidder_id)%>%summarise(meanbids=mean(numberbids))
@@ -90,7 +55,7 @@ Next, number of distinct auctions bid on - This will depend on bot coding - if a
 
 First, let's group the data into users and auctions, then regroup into users and use n().
 
-```{r}
+```{r,eval=FALSE}
 numauctions<-function(dataframe){
   dataframe%>%group_by(bidder_id,auction)%>%summarise(numberbids=n())%>%
     group_by(bidder_id)%>%summarise(numauctions=n())
@@ -101,7 +66,7 @@ Now maybe bots use a user agent switcher so they appear to use different devices
 
 again, using pylr we group and and use n().
 
-```{r}
+```{r,eval=FALSE}
 numdevices<-function(dataframe){
   dataframe%>%group_by(bidder_id,device)%>%summarise(timesused=n())%>%
     group_by(bidder_id)%>%summarise(numdevices=n())
@@ -110,7 +75,7 @@ numdevices<-function(dataframe){
 
 A bot might only be going after one specific type of merchandise - let's check
 
-```{r}
+```{r,eval=FALSE}
 numtypes<-function(dataframe){
   dataframe%>%group_by(bidder_id,merchandise)%>%summarise(timeseachtype=n())%>%
     group_by(bidder_id)%>%summarise(numtypes=n())
@@ -121,7 +86,7 @@ After running this predictor, we get no users with more than 1 type of merchandi
 
 So, bots most common (or only!) merchandise might be of a particular type - ie home goods might not be worth coding a bot for. Let's check - it's easy as we know there is no replication
 
-```{r}
+```{r,eval=FALSE}
 commonmerch<-function(dataframe){
   dataframe%>%group_by(bidder_id)%>%summarise(commonmerch=merchandise[1])
 }
@@ -129,7 +94,7 @@ commonmerch<-function(dataframe){
 
 Now let's try country number - someone bidding from multiple countries is up to something.
 
-```{r}
+```{r,eval=FALSE}
 numcountry<-function(dataframe){
   dataframe%>%group_by(bidder_id,country)%>%summarise(n())%>%
     group_by(bidder_id)%>%summarise(numcountry=n())
@@ -138,11 +103,18 @@ numcountry<-function(dataframe){
 
 Now find the most common country - some countries might be more susceptible to bots than others.
 
-```{r}
+```{r,eval=FALSE}
 commoncountry<-function(dataframe){
   dataframe%>%group_by(bidder_id,country)%>%summarise(number=n())%>%
     group_by(bidder_id)%>%summarise(commoncountry=country[which.max(number)])
 }
+```
+
+I'm going to turn on multiple cores here - dplyr is a little parallelised, so it might help. It definitely will help when it comes to training.
+
+```{r,eval=FALSE}
+cl <- makeCluster(4)
+registerDoSNOW(cl)
 ```
 
 Now let's do some time series stuff. If the bots are poorly coded, they will always bid exactly, say, 10 seconds after the last bid. So, if we can calculate the diffs for each, we will get a picture of anyone doing something weird.
@@ -160,7 +132,7 @@ timediffbids<-bids%>%group_by(auction)%>%do(.,differences(.))
 
 Now let's use that data to get mean time since last bid, and the percentage of bids in which the user was the first, and the percentage of bids in which the user was the first. I'm getting mutliple predictors here as they are quicker when gathered at once. call on timediffbids.
 
-```{r}
+```{r,eval=FALSE}
 bidtimes<-function(dataframe){
   dataframe%>%group_by(bidder_id)%>%
     summarise(averagetimetobid=mean(time),percentfirst=sum(.[["time"]]==0)/n())
@@ -169,7 +141,7 @@ bidtimes<-function(dataframe){
 
 Now depending on how the site works, a bid against yourself might be smart (if there is a reserve), or a way of bidding up the price (bot). This one again is slow. Either way, lets make it a feature. Call this on timediffbids.
 
-```{r}
+```{r,eval=FALSE}
 bidself<-function(df){
   df$self<-0
   if(nrow(df)==1){
@@ -188,7 +160,7 @@ bidagainstself<-function(dataframe){
 
 Now let's add in the number of final bids. We can assume bots either are trying to jack up prices but lose, or win lots of auctions. Either way there should be a signal here. Let's get proportion final bids, and total number. Again, run this on the timediffbids.
 
-```{r}
+```{r,eval=FALSE}
 numfinal<-function(dataframe){
   dataframe%>%group_by(auction)%>%mutate(last = c(rep(0,n()-1), 1))%>%
     group_by(bidder_id)%>%summarise(percentfinal=sum(last),percentfinal=mean(last))
@@ -197,7 +169,7 @@ numfinal<-function(dataframe){
 
 Now we have a percentage of mismatched bids - It is possible users are more likely to find something in a category noone else used to find it, whereas bots know exactly what they want. We know from above that noone switches type midstream, which simplifies analysis. 
 
-```{r}
+```{r,eval=FALSE}
 #pretty brutal function!
 percentmismatch<-function(dataframe){
   mostcommoninauction<-dataframe%>%group_by(auction,merchandise)%>%
@@ -209,9 +181,9 @@ percentmismatch<-function(dataframe){
 }
 ```
 
-Let's check nor for using multiple ipaddresses. This is probably highly correlated with number of countries:
+Let's check now for using multiple ipaddresses. This is probably highly correlated with number of countries:
 
-```{r}
+```{r,eval=FALSE}
 numipaddress<-function(dataframe){
   dataframe%>%group_by(bidder_id,ip)%>%summarise(n())%>%
     group_by(bidder_id)%>%summarise(numipaddress=n())
@@ -220,7 +192,7 @@ numipaddress<-function(dataframe){
 
 As the phones are based on models, it is possible the bot software is only using a small subset - lets get the most common phone type used for each user.
 
-```{r}
+```{r,eval=FALSE}
 commonphone<-function(dataframe){
   dataframe%>%group_by(bidder_id,device)%>%summarise(number=n())%>%
     group_by(bidder_id)%>%summarise(commonphone=device[which.max(number)])
@@ -229,7 +201,7 @@ commonphone<-function(dataframe){
 
 Shared use of the same ip could be an indication of cheating - let's find a value for number of shared addresses.
 
-```{r}
+```{r,eval=FALSE}
 percentsharedip<-function(dataframe){
   shareips<-dataframe%>%group_by(ip,bidder_id)%>%summarise(usesofaddress=n())%>%
     group_by(ip)%>%summarise(totalbidders=sum(n()>1))
@@ -238,24 +210,98 @@ percentsharedip<-function(dataframe){
 }
 ```
 
-We could do some fun graph stuff with shared ip addresses - ie see who is connected and call whole networks scams - I'll not do that here. This might be the key to getting over 0.9?
+Now let' do some network analysis. I'm going to connect every user by auctions bid on together (each auction = 2 connections) and get page rank etc from the resulting network. This stuff is memory intensive, I did them both in a seperate session, then added them onto my features csv.
 
-For now, we have a ton of predictors, and a few more to come that are easier once they are all made. I'm going to call it all at once to make a data frame with them all in. 
+```{r,eval=FALSE}
+groupbyauction<-bids%>%group_by(bidder_id,auction)%>%summarise(bidsperauction=n())
+removesingleauction<-bids%>%group_by(auction)%>%summarise(totalbidders=length(unique(.[["bidder_id"]])))
+removesingleauction<-removesingleauction[removesingleauction$totalbidders==1,]
+groupbyauction<-groupbyauction[!(groupbyauction$auction %in% removesingleauction$auction),]%>%as.data.frame()
 
-This will take a while! I reccomend saving it as a file so you don't have to run it again. In the raw knitr file, I've set to to not evaluate, so change it if you are playing along.
 
-```{r, eval=FALSE}
+groupbyauctioncombs<-groupbyauction%>%group_by(auction)%>%do(as.data.frame(t(combn(.[["bidder_id"]],2))))
+auctiongraphs<-graph.data.frame(groupbyauctioncombs[,2:3])
+auctionpage<-page.rank(auctiongraphs)
+auctiondegree<-degree(auctiongraphs)
+auctioncloseness<-closeness(auctiongraphs)
+auctionbetweenness<-betweenness(auctiongraphs)
+auctioneigen<-evcent(auctiongraphs)
+
+auctiongraphvalues<-data.frame(names(auctionpage$vector))
+auctiongraphvalues$auctionpagerank<-unname(auctionpage$vector)
+auctiongraphvalues$auctiondegree<-unname(auctiondegree)
+auctiongraphvalues$auctioncloseness<-unname(auctioncloseness)
+auctiongraphvalues$auctionbetweenness<-unname(auctionbetweenness)
+auctiongraphvalues$auctioneigen<-unname(auctioneigen$vector)
+```
+
+And the same, but for ip addresses. If two users share an ip address, they get a connectedness of two. Again, memory intensive, so not eval here.
+
+```{r,eval=FALSE}
+#groupperip
+groupbyip<-bids%>%group_by(bidder_id,ip)%>%summarise(bidsperip=n())
+removesingleip<-bids%>%group_by(ip)%>%summarise(totalbidders=length(unique(.[["bidder_id"]])))
+removesingleip<-removesingleip[removesingleip$totalbidders==1,]
+groupbyip<-groupbyip[!(groupbyip$ip %in% removesingleip$ip),]%>%as.data.frame()
+
+
+groupbyipcombs<-groupbyip%>%group_by(ip)%>%do(as.data.frame(t(combn(.[["bidder_id"]],2))))
+ipgraphs<-graph.data.frame(groupbyipcombs[,2:3])
+ippage<-page.rank(ipgraphs)
+ipdegree<-degree(ipgraphs)
+ipcloseness<-closeness(ipgraphs)
+ipbetweenness<-betweenness(ipgraphs)
+ipeigen<-evcent(ipgraphs)
+
+ipgraphvalues<-data.frame(names(ippage$vector))
+ipgraphvalues$ippagerank<-unname(ippage$vector)
+ipgraphvalues$ipdegree<-unname(ipdegree)
+ipgraphvalues$ipcloseness<-unname(ipcloseness)
+ipgraphvalues$ipbetweenness<-unname(ipbetweenness)
+ipgraphvalues$ipeigen<-unname(ipeigen$vector)
+write.csv(ipgraphvalues,file="ipgraphvalues.csv")
+```
+
+share ip with a bot?
+
+```{r,eval=FALSE}
+shareipwithbot<-function(dataframe,trainingset){
+  knownbots<-train[train$outcome==1,]
+  botips<-unique(merge(bids,knownbots,by="bidder_id",all.x=FALSE)$ip)
+  dataframe%>%group_by(bidder_id,ip)%>%summarise(num=n())%>%group_by(bidder_id)%>%
+    summarise(share=sum(any(ip %in% botips)))
+}
+```
+
+How many devices per auction? mean and sd
+
+```{r,eval=FALSE}
+biddistribution<-function(df){
+  df %>% group_by(bidder_id, auction, device) %>% 
+      summarise(n()) %>% 
+      group_by(bidder_id, auction) %>%
+      summarise(perdevice = n()) %>%
+      group_by(bidder_id) %>%
+      summarise(meandevicesperauction = mean(perdevice), sddevicesperauction = sd(perdevice))
+}
+```
+
+
+Now run everthing
+
+```{r,eval=FALSE}
 fulldata<-join_all(list(totalbids(bids),meanbids(bids),numauctions(bids),
                         numdevices(bids),commonmerch(bids),numcountry(bids),
                         commoncountry(bids),bidtimes(timediffbids),
                         bidagainstself(timediffbids),numfinal(timediffbids),
                         percentmismatch(bids),numipaddress(bids),
-                        commonphone(bids),percentsharedip(bids)), 
+                        commonphone(bids),percentsharedip(bids),shareipwithbot(bids,train),
+                        biddistribution(bids)), 
                    by='bidder_id',type='full')
 write.csv(fulldata,file="fulldata.csv",row.names=FALSE)
 ```
 
-We now have 15 predictors! Let's read in the file, and make a couple of composite ones.
+Let's read in the file, and make a couple of composite ones.
 
 ```{r,eval=FALSE}
 fulldata<-read.csv("fulldata.csv")
@@ -263,13 +309,24 @@ fulldata$ippercountry<-fulldata$numipaddress/fulldata$numcountry
 fulldata$wonauctions<-fulldata$percentfinal/fulldata$numauctions
 ```
 
-Now comes the actual machine learning! We can do fun things like scale and turn categories into dummy variables. For now, I'll just leave it, and hope the fitting package takes care of it.
+Add in the network analysis:
 
-I'm going to use gradient boosting - as it is fast. Random Forest will probably be better, but it will take forever (about an hour on my laptop).
+```{r,eval=FALSE}
+ipgraphvalues<-read.csv("ipgraphvalues.csv")
+ipgraphvalues<-ipgraphvalues[2:7]
+names(ipgraphvalues)<-c("bidder_id","ippagerank","ipdegree","ipcloseness","ipbetweeness","ipeigen")
+
+auctiongraphvalues<-read.csv("auctiongraphvalues.csv")
+auctiongraphvalues<-auctiongraphvalues[2:7]
+names(auctiongraphvalues)<-c("bidder_id","auctionpagerank","auctiondegree","auctioncloseness","auctionbetweeness","auctioneigen")
+
+fulldata<-join_all(list(fulldata,ipgraphvalues,auctiongraphvalues),by="bidder_id")
+fulldata[16:29][is.na(fulldata[16:29])]<-0
+```
 
 First, let's set our fitting parameters. I'm using 10 fold crossvalidation
 
-```{r}
+```{r,eval=FALSE}
 fitControl <- trainControl(
   method = "repeatedcv",
   number = 10,
@@ -287,27 +344,23 @@ predictors<-mergeddata[,-c(1,(ncol(mergeddata)-2):(ncol(mergeddata)))]
 outcomes<-mergeddata[,ncol(mergeddata)]
 ```
 
-Now gradient boosting
-
-```{r,eval=FALSE}
-gbmFit1 <- train(x=predictors,y=outcomes,
-                 method = "gbm",
-                 trControl = fitControl,
-                 verbose = FALSE)
-print(gbmFit1)
-```
-
 Random Forest (not run)
 
-```{r}
-#rffit1 <- train(fulldata[,4]~.,data=fulldata[,5:18],method="rf",trControl = #fitControl,verbose=FALSE)
-#print(rffit1)
+```{r,eval=FALSE}
+rffit1 <- train(mergeddata[,ncol(mergeddata)]~.,data=mergeddata[,-c(1,(ncol(mergeddata)-2):(ncol(mergeddata)))],method="rf",trControl = fitControl,verbose=FALSE,importance = TRUE)
+print(rffit1)
+```
+
+stop cluster
+
+```{r,eval=FALSE}
+stopCluster(cl)
 ```
 
 Now we can predict!
 
 First read in the test data, and then merge it.
-We have 70 bidders in the test data, but not in the bids sheet. Let's give them the average value of our prediction.
+We have 70 bidders in the test data, but not in the bids sheet. Let's give them 0 as a prediction.
 
 ```{r,eval=FALSE}
 test<-fread("test.csv")
@@ -323,11 +376,22 @@ x=cbind(as.data.frame(mergeddata$bidder_id),predict(gbmFit1,predictors))
 x$`predict(gbmFit1, predictors)`[x$`predict(gbmFit1, predictors)`<0]<-0
 togiveempty<-mean(x$`predict(gbmFit1, predictors)`)
 empty<-cbind(as.data.frame(
-  test[!(test$bidder_id %in% fulldata$bidder_id)]$bidder_id),togiveempty)
+  test[!(test$bidder_id %in% fulldata$bidder_id)]$bidder_id),0)
 names(empty)<-names(x)
 x=rbind(x,empty)
-write.csv(x,"output.csv")
+write.csv(x,"outputgbm.csv")
 ```
 
-This gave me a score of 0.76567 - about 0.1 worse than my best answer! So we need to do some data clean up and more sensible feature choice. It's a good start for a walkthrough though.
+```{r,eval=FALSE}
+x=cbind(as.data.frame(mergeddata$bidder_id),predict(rffit1,predictors,na.action=na.roughfix))
+names(x)<-c("bidder_id","prediction")
+x$prediction[x$prediction<0]<-0
+x$prediction[x$prediction>0.5]<-1
+empty<-cbind(as.data.frame(
+  test[!(test$bidder_id %in% fulldata$bidder_id)]$bidder_id),0)
+names(empty)<-names(x)
+x=rbind(x,empty)
+write.csv(x,"outputrf.csv")
+```
+
 
